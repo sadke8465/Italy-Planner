@@ -16,8 +16,10 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "outDir": "dist/ts",
+    "rootDir": "src",
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/*": ["src/*"] },
+    "ignoreDeprecations": "5.0"
   },
   "include": ["src"]
 }

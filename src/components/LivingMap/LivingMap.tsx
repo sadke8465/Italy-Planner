@@ -8,185 +8,147 @@ import Map, {
 } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import { useTripStore } from '../../state/tripStore'
+import { useTripStore, type Phase } from '../../state/tripStore'
 import { regions, regionsById } from '../../data/regions'
-import { regionRelevance } from '../../data/vibe'
-import { buildLeg, formatDuration, haversine } from '../../data/transit'
+import { buildLeg, formatDuration } from '../../data/transit'
 import { ITALY_BOUNDS, ITALY_CENTER, fallbackStyle, mapStyleUrl } from './mapStyle'
 import type { Coordinates } from '../../types'
 import { IsochroneLayer } from './IsochroneLayer'
 import { HighlightPin } from './HighlightPin'
 
 interface Props {
-  mode: 'vibe' | 'pitch' | 'sculpt'
+  mode: Phase
 }
 
 export function LivingMap({ mode }: Props) {
   const mapRef = useRef<MapRef | null>(null)
-  const vibe = useTripStore((s) => s.vibe)
   const focused = useTripStore((s) => s.focusedRegionId)
-  const zoomLevel = useTripStore((s) => s.zoomLevel)
   const hovered = useTripStore((s) => s.hoveredRegionId)
   const setHovered = useTripStore((s) => s.setHoveredRegion)
   const setFocused = useTripStore((s) => s.setFocusedRegion)
-  const setZoom = useTripStore((s) => s.setZoomLevel)
-  const itinerary = useTripStore((s) => s.itinerary)
+  const stops = useTripStore((s) => s.stops)
+  const transitMode = useTripStore((s) => s.transitMode)
   const isochroneNodeId = useTripStore((s) => s.isochroneNodeId)
-  const toggleIsochrone = useTripStore((s) => s.toggleIsochrone)
   const season = useTripStore((s) => s.season)
 
   const [styleError, setStyleError] = useState(false)
-  const [ghostCursor, setGhostCursor] = useState<Coordinates | null>(null)
 
-  // Heatmap source: one point per region weighted by current vibe fit.
-  const heatmapSource = useMemo(() => {
-    return {
-      type: 'FeatureCollection' as const,
-      features: regions.map((r) => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: r.center },
-        properties: {
-          weight: Math.max(0.05, regionRelevance(vibe, r)),
-          region_id: r.region_id,
-        },
-      })),
-    }
-  }, [vibe])
-
-  // Region "halo" circles at macro level.
+  // Region markers (clickable cities).
   const regionHalos = useMemo(
     () => ({
       type: 'FeatureCollection' as const,
-      features: regions.map((r) => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: r.center },
-        properties: {
-          region_id: r.region_id,
-          name: r.name,
-          score: regionRelevance(vibe, r),
-          focused: focused === r.region_id,
-          hovered: hovered === r.region_id,
-          inTrip: itinerary.stops.some((s) => s.region_id === r.region_id),
-        },
-      })),
+      features: regions.map((r) => {
+        const inTrip = stops.some((s) => s.region_id === r.region_id)
+        return {
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: r.center },
+          properties: {
+            region_id: r.region_id,
+            name: r.name,
+            focused: focused === r.region_id,
+            hovered: hovered === r.region_id,
+            inTrip,
+          },
+        }
+      }),
     }),
-    [vibe, focused, hovered, itinerary.stops],
+    [focused, hovered, stops],
   )
 
-  // Committed route polyline.
-  const routeLine = useMemo(() => {
-    if (itinerary.stops.length < 2) return null
-    const mode =
-      itinerary.transit_mode_preference === 'scenic' ? 'scenic' : 'high_speed_rail'
+  // Committed route, Google Maps-style: bold oxblood line with arrows.
+  const { routeLine, segmentLabels } = useMemo(() => {
+    if (stops.length < 2) return { routeLine: null, segmentLabels: [] }
     const features = []
-    for (let i = 0; i < itinerary.stops.length - 1; i++) {
-      const from = itinerary.stops[i]
-      const to = itinerary.stops[i + 1]
-      const leg = buildLeg(from.region_id, to.region_id, mode)
+    const labels: { coord: Coordinates; text: string }[] = []
+    for (let i = 0; i < stops.length - 1; i++) {
+      const from = stops[i]
+      const to = stops[i + 1]
+      const leg = buildLeg(from.region_id, to.region_id, transitMode)
       features.push({
         type: 'Feature' as const,
         geometry: leg.polyline_geojson,
         properties: { leg_id: leg.leg_id },
       })
+      const coords = leg.polyline_geojson.coordinates
+      if (coords.length > 0) {
+        const midCoord = coords[Math.floor(coords.length / 2)]
+        labels.push({
+          coord: midCoord,
+          text: formatDuration(leg.estimated_duration_minutes),
+        })
+      }
     }
-    return { type: 'FeatureCollection' as const, features }
-  }, [itinerary.stops, itinerary.transit_mode_preference])
-
-  // Ghost path from last committed stop to cursor while scrubbing (§3, Phase 2).
-  const ghostLine = useMemo(() => {
-    if (!ghostCursor || itinerary.stops.length === 0 || mode !== 'sculpt') return null
-    const last = itinerary.stops[itinerary.stops.length - 1]
-    const origin = regionsById[last.region_id]?.center
-    if (!origin) return null
     return {
-      type: 'Feature' as const,
-      geometry: { type: 'LineString' as const, coordinates: [origin, ghostCursor] },
-      properties: {},
+      routeLine: { type: 'FeatureCollection' as const, features },
+      segmentLabels: labels,
     }
-  }, [ghostCursor, itinerary.stops, mode])
+  }, [stops, transitMode])
 
-  const ghostLabel = useMemo(() => {
-    if (!ghostCursor || itinerary.stops.length === 0 || mode !== 'sculpt') return null
-    const last = itinerary.stops[itinerary.stops.length - 1]
-    const origin = regionsById[last.region_id]?.center
-    if (!origin) return null
-    const km = haversine(origin, ghostCursor)
-    const transitMode =
-      itinerary.transit_mode_preference === 'scenic' ? 'scenic' : 'high_speed_rail'
-    const speed = transitMode === 'scenic' ? 75 : 200
-    const minutes = (km / speed) * 60
-    return {
-      lng: ghostCursor[0],
-      lat: ghostCursor[1],
-      text:
-        transitMode === 'scenic'
-          ? `${formatDuration(minutes)} \u2022 via scenic route \u2022 ${Math.round(km)} km`
-          : `${formatDuration(minutes)} \u2022 Frecciarossa \u2022 ${Math.round(km)} km`,
-    }
-  }, [ghostCursor, itinerary.stops, itinerary.transit_mode_preference, mode])
-
-  // Animate camera on focus/zoom changes.
+  // Animate camera on focus / stops change.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    if (focused && zoomLevel !== 'macro') {
+    if (focused) {
       const region = regionsById[focused]
       if (region) {
         map.fitBounds(region.bounding_box, {
-          padding: { top: 120, bottom: 260, left: 120, right: 420 },
-          duration: 1400,
+          padding: { top: 140, bottom: 260, left: 460, right: 120 },
+          duration: 1200,
         })
+        return
       }
-    } else if (itinerary.stops.length > 1) {
-      const coords = itinerary.stops.map((s) => regionsById[s.region_id]?.center).filter(Boolean) as Coordinates[]
-      const sw: Coordinates = [Math.min(...coords.map((c) => c[0])), Math.min(...coords.map((c) => c[1]))]
-      const ne: Coordinates = [Math.max(...coords.map((c) => c[0])), Math.max(...coords.map((c) => c[1]))]
+    }
+    if (stops.length > 1) {
+      const coords = stops
+        .map((s) => regionsById[s.region_id]?.center)
+        .filter(Boolean) as Coordinates[]
+      const sw: Coordinates = [
+        Math.min(...coords.map((c) => c[0])) - 0.5,
+        Math.min(...coords.map((c) => c[1])) - 0.5,
+      ]
+      const ne: Coordinates = [
+        Math.max(...coords.map((c) => c[0])) + 0.5,
+        Math.max(...coords.map((c) => c[1])) + 0.5,
+      ]
       map.fitBounds([sw, ne], {
-        padding: { top: 140, bottom: 260, left: 180, right: 420 },
-        duration: 1400,
+        padding: { top: 140, bottom: 260, left: 460, right: 120 },
+        duration: 1200,
       })
     } else {
       map.fitBounds(ITALY_BOUNDS, {
-        padding: { top: 60, bottom: 200, left: 60, right: 60 },
+        padding: { top: 60, bottom: 240, left: 400, right: 60 },
         duration: 1200,
       })
     }
-  }, [focused, zoomLevel, itinerary.stops])
+  }, [focused, stops, mode])
 
   const focusedRegion = focused ? regionsById[focused] : null
 
-  // Visible highlight pins at meso/micro.
   const visibleHighlights = useMemo(() => {
-    if (!focusedRegion || zoomLevel === 'macro') return []
+    if (!focusedRegion) return []
     return focusedRegion.curated_highlights.filter((h) => {
       if (h.seasonality === 'warm' && season === 'cold') return false
       if (h.seasonality === 'cold' && season === 'warm') return false
       return true
     })
-  }, [focusedRegion, zoomLevel, season])
+  }, [focusedRegion, season])
 
   const isochroneHighlight = useMemo(() => {
     if (!isochroneNodeId || !focusedRegion) return null
-    return focusedRegion.curated_highlights.find((h) => h.node_id === isochroneNodeId) ?? null
+    return (
+      focusedRegion.curated_highlights.find((h) => h.node_id === isochroneNodeId) ?? null
+    )
   }, [isochroneNodeId, focusedRegion])
 
   function onMapClick(e: MapLayerMouseEvent) {
     const features = e.features ?? []
     const regionFeature = features.find((f) => f.layer.id.startsWith('region-'))
     if (regionFeature) {
-      const id = regionFeature.properties?.region_id as string
-      if (id) {
-        setFocused(id)
-        setZoom('meso')
-      }
+      const id = regionFeature.properties?.region_id as string | undefined
+      if (id) setFocused(id)
       return
     }
-    // Click outside regions with something focused → back out.
-    if (focused) {
-      setFocused(null)
-      setZoom('macro')
-      toggleIsochrone(null)
-    }
+    if (focused) setFocused(null)
   }
 
   function onMouseMove(e: MapLayerMouseEvent) {
@@ -194,14 +156,28 @@ export function LivingMap({ mode }: Props) {
     const regionFeature = features.find((f) => f.layer.id.startsWith('region-'))
     const nextHover = (regionFeature?.properties?.region_id as string) ?? null
     if (nextHover !== hovered) setHovered(nextHover)
-
-    if (mode === 'sculpt') setGhostCursor([e.lngLat.lng, e.lngLat.lat])
   }
 
   function onMouseLeave() {
     setHovered(null)
-    setGhostCursor(null)
   }
+
+  // Each committed stop gets a numbered marker (S / 1 / 2 / … / E).
+  const stopMarkers = useMemo(() => {
+    let counter = 0
+    return stops.map((stop) => {
+      const region = regionsById[stop.region_id]
+      if (!region) return null
+      let label: string
+      if (stop.role === 'start') label = 'S'
+      else if (stop.role === 'end') label = 'E'
+      else {
+        counter += 1
+        label = String(counter)
+      }
+      return { stop_id: stop.stop_id, region, label, role: stop.role }
+    })
+  }, [stops])
 
   return (
     <div className="map-root" onMouseLeave={onMouseLeave}>
@@ -225,32 +201,7 @@ export function LivingMap({ mode }: Props) {
         touchPitch={false}
         attributionControl={true}
       >
-        {/* Heatmap bloom driven by Vibe Engine */}
-        <Source id="vibe-heatmap" type="geojson" data={heatmapSource}>
-          <Layer
-            id="vibe-heat"
-            type="heatmap"
-            paint={{
-              'heatmap-weight': ['get', 'weight'],
-              'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 4, 1.0, 8, 2.2],
-              'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 4, 70, 8, 140],
-              'heatmap-opacity': mode === 'vibe' ? 0.85 : mode === 'pitch' ? 0.55 : 0.18,
-              'heatmap-color': [
-                'interpolate',
-                ['linear'],
-                ['heatmap-density'],
-                0, 'rgba(0,0,0,0)',
-                0.2, 'rgba(247, 220, 180, 0.4)',
-                0.4, 'rgba(231, 165, 120, 0.55)',
-                0.6, 'rgba(201, 92, 75, 0.65)',
-                0.8, 'rgba(143, 47, 55, 0.75)',
-                1, 'rgba(89, 20, 36, 0.85)',
-              ],
-            }}
-          />
-        </Source>
-
-        {/* Region halos (clickable) */}
+        {/* Region markers — simple hover/click targets */}
         <Source id="region-halos" type="geojson" data={regionHalos}>
           <Layer
             id="region-halo-fill"
@@ -258,8 +209,8 @@ export function LivingMap({ mode }: Props) {
             paint={{
               'circle-radius': [
                 'interpolate', ['linear'], ['zoom'],
-                4, ['+', 14, ['*', ['get', 'score'], 16]],
-                8, ['+', 24, ['*', ['get', 'score'], 26]],
+                4, ['case', ['get', 'inTrip'], 10, 14],
+                8, ['case', ['get', 'inTrip'], 14, 22],
               ],
               'circle-color': [
                 'case',
@@ -269,28 +220,26 @@ export function LivingMap({ mode }: Props) {
               ],
               'circle-opacity': [
                 'case',
+                ['get', 'inTrip'], 0.0,
+                ['get', 'focused'], 0.45,
                 ['get', 'hovered'], 0.55,
-                ['get', 'focused'], 0.4,
-                0.22,
+                0.28,
               ],
               'circle-stroke-width': [
                 'case',
+                ['get', 'inTrip'], 0,
                 ['get', 'hovered'], 2,
-                ['get', 'inTrip'], 2,
-                ['get', 'focused'], 1.5,
-                0.5,
+                ['get', 'focused'], 2,
+                0.8,
               ],
-              'circle-stroke-color': [
-                'case',
-                ['get', 'inTrip'], '#591424',
-                '#8f2f37',
-              ],
-              'circle-stroke-opacity': 0.75,
+              'circle-stroke-color': '#8f2f37',
+              'circle-stroke-opacity': 0.7,
             }}
           />
           <Layer
             id="region-halo-label"
             type="symbol"
+            filter={['!', ['get', 'inTrip']]}
             layout={{
               'text-field': ['get', 'name'],
               'text-font': ['Noto Sans Regular'],
@@ -304,60 +253,64 @@ export function LivingMap({ mode }: Props) {
               'text-color': '#1c1917',
               'text-halo-color': 'rgba(245,241,234,0.85)',
               'text-halo-width': 1.5,
-              'text-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.0, 5, 1.0, 9, 0.2],
+              'text-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.0, 5, 0.9, 9, 0.2],
             }}
           />
         </Source>
 
-        {/* Ghost path */}
-        {ghostLine && (
-          <Source id="ghost-line" type="geojson" data={ghostLine}>
-            <Layer
-              id="ghost-line-layer"
-              type="line"
-              paint={{
-                'line-color': '#8f2f37',
-                'line-width': 2,
-                'line-dasharray': [1, 2],
-                'line-opacity': 0.65,
-              }}
-            />
-          </Source>
-        )}
-
-        {/* Committed route */}
+        {/* Committed route — Google Maps style: white halo + oxblood core + arrows */}
         {routeLine && (
           <Source id="route-line" type="geojson" data={routeLine}>
             <Layer
               id="route-line-halo"
               type="line"
+              layout={{ 'line-cap': 'round', 'line-join': 'round' }}
               paint={{
-                'line-color': '#f5f1ea',
-                'line-width': 8,
-                'line-opacity': 0.9,
-                'line-blur': 2,
+                'line-color': '#ffffff',
+                'line-width': 9,
+                'line-opacity': 0.95,
               }}
             />
             <Layer
               id="route-line-core"
               type="line"
+              layout={{ 'line-cap': 'round', 'line-join': 'round' }}
               paint={{
-                'line-color': '#591424',
-                'line-width': 3,
+                'line-color': '#8f2f37',
+                'line-width': 5,
                 'line-opacity': 0.95,
-                'line-dasharray':
-                  itinerary.transit_mode_preference === 'scenic' ? [2, 1.5] : [1, 0],
+                'line-dasharray': transitMode === 'scenic' ? [1.2, 1.4] : [1, 0],
+              }}
+            />
+            {/* Directional arrows along the route */}
+            <Layer
+              id="route-line-arrows"
+              type="symbol"
+              layout={{
+                'symbol-placement': 'line',
+                'symbol-spacing': 110,
+                'text-field': '▶',
+                'text-size': 14,
+                'text-keep-upright': false,
+                'text-rotation-alignment': 'map',
+                'text-allow-overlap': true,
+                'text-ignore-placement': true,
+              }}
+              paint={{
+                'text-color': '#ffffff',
+                'text-halo-color': '#591424',
+                'text-halo-width': 2,
               }}
             />
           </Source>
         )}
 
-        {/* Isochrone blob (§4B) */}
+        {/* Isochrone blob (long-press) */}
         {isochroneHighlight && (
           <IsochroneLayer center={isochroneHighlight.coordinates} radiusKm={90} />
         )}
 
-        {/* Highlight pins */}
+        {/* Highlight pins for the focused region */}
         {visibleHighlights.map((h) => (
           <Marker
             key={h.node_id}
@@ -369,19 +322,38 @@ export function LivingMap({ mode }: Props) {
           </Marker>
         ))}
 
-        {/* Ghost label */}
-        {ghostLabel && (
-          <Marker longitude={ghostLabel.lng} latitude={ghostLabel.lat} anchor="bottom">
-            <div className="ghost-label">{ghostLabel.text}</div>
-          </Marker>
+        {/* Numbered stop markers (S, 1, 2, 3, …, E) */}
+        {stopMarkers.map((s) =>
+          s ? (
+            <Marker
+              key={s.stop_id}
+              longitude={s.region.center[0]}
+              latitude={s.region.center[1]}
+              anchor="bottom"
+            >
+              <button
+                className="stop-pin"
+                data-role={s.role}
+                data-focused={focused === s.region.region_id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setFocused(s.region.region_id)
+                }}
+              >
+                <span className="stop-pin__badge">{s.label}</span>
+                <span className="stop-pin__name">{s.region.name}</span>
+              </button>
+            </Marker>
+          ) : null,
         )}
-      </Map>
 
-      {/* Depth-of-field blur mask when meso-focused (§3, Phase 3) */}
-      <div
-        className="dof-mask"
-        data-active={zoomLevel !== 'macro'}
-      />
+        {/* Segment duration labels near midpoint of each leg */}
+        {segmentLabels.map((lab, i) => (
+          <Marker key={i} longitude={lab.coord[0]} latitude={lab.coord[1]} anchor="bottom">
+            <div className="segment-label">{lab.text}</div>
+          </Marker>
+        ))}
+      </Map>
     </div>
   )
 }
