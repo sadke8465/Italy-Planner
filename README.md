@@ -31,6 +31,35 @@ the hero; information is disclosed only when spatially relevant.
 - **Time-Radius Isochrone** (§4B) — long-press any highlight pin to
   bloom a 1h / 2h / 3h concentric reach blob.
 
+## User Flow
+
+```
+Phase 1 — Vibe Engine
+  Open app → full-bleed Italy map + glassmorphic slider panel
+  Adjust sliders (History ↔ Culture, Coastal ↔ Alpine, etc.)
+  WebGL heatmap responds in real time, highlighting matching regions
+  3 ranked Archetype cards appear → select one to seed the itinerary
+
+Phase 2 — Map Scrubbing & Ghost Paths
+  Hover over any region → elastic ribbon stretches from last pin to cursor
+  Live micro-label shows transit time ("1.5h Frecciarossa" / "3h drive")
+  Toggle Analog/Scenic ↔ High-Speed to reveal different route options
+  and unlock off-the-beaten-path hilltop nodes on secondary roads
+
+Phase 3 — Meso Drill-Down
+  Click a region halo → camera eases in, surrounding map dims (DoF blur)
+  Curated highlight pins bloom inside the focused region
+  Click a city → street-grid zoom, generic icons replaced by editorial glyphs
+
+Phase 4 — Drag-to-Commit & Logistics
+  Drag a highlight card onto the ribbon or timeline dock to commit it
+  Route polyline locks to rail or highway depending on selected transit mode
+  ZTL warning badge appears when driving into a restricted traffic zone
+  Seasonal highlights fade out if the trip date falls in the off-season
+  Long-press any committed pin → 1h / 2h / 3h isochrone blob blooms
+  Tension Timeline compresses visually when too many stops crowd a day
+```
+
 ## Stack
 
 Per §5 of the spec:
