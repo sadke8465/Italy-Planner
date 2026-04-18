@@ -32,7 +32,15 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  min-width: 1280px;
 }
+
+/* ---------- Desktop scrollbars ---------- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- Layout ---------- */
@@ -46,17 +54,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .app__brand {
   position: absolute;
-  top: 28px;
-  left: 36px;
+  top: 30px;
+  left: 40px;
   z-index: 40;
   display: flex;
   align-items: baseline;
-  gap: 14px;
+  gap: 16px;
   pointer-events: none;
 }
 .app__brand-mark {
   font-family: var(--serif);
-  font-size: 26px;
+  font-size: 28px;
   font-style: italic;
   letter-spacing: 0.02em;
   color: var(--ink);
@@ -93,8 +101,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: var(--shadow-lg);
 }
 
-.panel__header { padding: 32px 32px 12px; }
-.panel__footer { padding: 14px 32px 28px; }
+.panel__header { padding: 36px 36px 14px; }
+.panel__footer { padding: 16px 36px 32px; }
 
 .panel__eyebrow {
   display: block;
@@ -107,7 +115,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .panel__title {
   font-family: var(--serif);
   font-weight: 500;
-  font-size: clamp(26px, 2.4vw, 36px);
+  font-size: clamp(28px, 2.5vw, 40px);
   line-height: 1.15;
   letter-spacing: -0.01em;
   margin: 0 0 10px;
@@ -152,13 +160,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: min(560px, 92vw);
+  width: min(660px, 90vw);
 }
 .setup__form {
-  padding: 6px 32px 14px;
+  padding: 6px 36px 14px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px 20px;
+  gap: 18px 24px;
 }
 .setup__field { display: flex; flex-direction: column; gap: 8px; }
 .setup__field:nth-child(3) { grid-column: 1 / -1; }
@@ -250,17 +258,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- Explore panel ---------- */
 .panel--explore {
-  left: 28px;
-  top: 100px;
-  bottom: 230px;
-  width: min(400px, 36vw);
+  left: 32px;
+  top: 96px;
+  bottom: 240px;
+  width: clamp(420px, 30vw, 520px);
   padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 .explore__header {
-  padding: 24px 26px 18px;
+  padding: 26px 30px 20px;
   border-bottom: 1px solid var(--line);
 }
 .explore__list {
@@ -278,7 +286,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: var(--bg);
   overflow: hidden;
   display: grid;
-  grid-template-columns: 104px 1fr;
+  grid-template-columns: 120px 1fr;
   gap: 0;
   transition: transform 200ms, box-shadow 200ms, border-color 200ms;
 }
@@ -289,7 +297,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .explore-card__image {
   height: 100%;
-  min-height: 94px;
+  min-height: 108px;
   background-size: cover;
   background-position: center;
   background-color: var(--accent-soft);
@@ -507,11 +515,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .explore-controls {
   position: absolute;
   top: 28px;
-  right: 28px;
+  right: 32px;
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
   justify-content: flex-end;
   max-width: calc(100vw - 56px);
@@ -553,9 +561,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---------- Directions timeline ---------- */
 .directions {
   position: absolute;
-  left: 28px;
-  right: 28px;
-  bottom: 20px;
+  left: 32px;
+  right: 32px;
+  bottom: 22px;
   z-index: 10;
   background: var(--glass-strong);
   backdrop-filter: blur(30px) saturate(1.15);
@@ -563,7 +571,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  padding: 16px 22px 20px;
+  padding: 18px 26px 22px;
 }
 .directions__header {
   display: flex;
@@ -663,8 +671,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   all: unset;
   cursor: pointer;
   position: relative;
-  min-width: 200px;
-  padding: 14px 16px 14px 46px;
+  min-width: 220px;
+  padding: 14px 18px 14px 48px;
   border-radius: var(--radius-md);
   background: var(--bg);
   border: 1px solid var(--line);
@@ -862,20 +870,3 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 4px;
 }
 
-/* ---------- Responsive ---------- */
-@media (max-width: 900px) {
-  .panel--setup { width: calc(100vw - 32px); }
-  .setup__form { grid-template-columns: 1fr; }
-  .panel--explore {
-    left: 12px; right: 12px;
-    width: auto;
-    top: 88px;
-    bottom: 260px;
-  }
-  .explore-controls {
-    top: 12px; right: 12px;
-    flex-direction: column-reverse;
-    align-items: flex-end;
-  }
-  .directions { left: 12px; right: 12px; }
-}
