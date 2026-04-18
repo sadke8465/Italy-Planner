@@ -1,246 +1,234 @@
 import { create } from 'zustand'
-import type {
-  Archetype,
-  Itinerary,
-  ItineraryStop,
-  TransitMode,
-  VibeAxis,
-  VibeWeights,
-  ZoomLevel,
-} from '../types'
-import { archetypes } from '../data/archetypes'
-import { defaultVibe } from '../data/vibe'
+import type { TransitMode } from '../types'
 import { regionsById } from '../data/regions'
 
-type Phase = 'vibe' | 'pitch' | 'sculpt'
+// --- New exploration-based model ------------------------------------------
+// The user enters a start + end + total_days (phase: 'setup'), then moves into
+// 'explore' to browse regions, view their curated offerings, and add them as
+// stops. Start + end are always pinned; middle stops are user-inserted and
+// can be reordered or removed. Travel segments between stops are derived
+// from buildLeg() in /data/transit.
+
+export type Phase = 'setup' | 'explore'
+
+export type StopRole = 'start' | 'middle' | 'end'
+
+export interface PlaceStop {
+  stop_id: string
+  region_id: string
+  role: StopRole
+  nights: number
+  highlight_ids: string[]
+}
 
 interface TripState {
   phase: Phase
-  vibe: VibeWeights
-  itinerary: Itinerary
+  startRegionId: string | null
+  endRegionId: string | null
+  totalDays: number
+
+  stops: PlaceStop[] // always [start, ...middle, end] once explore begins
   focusedRegionId: string | null
-  zoomLevel: ZoomLevel
   hoveredRegionId: string | null
   isochroneNodeId: string | null
+
+  transitMode: TransitMode
   season: 'warm' | 'cold'
 
-  setVibe: (axis: VibeAxis, value: number) => void
-  setPhase: (p: Phase) => void
-  selectArchetype: (a: Archetype) => void
-  setHoveredRegion: (id: string | null) => void
+  // setup actions
+  setStart: (id: string | null) => void
+  setEnd: (id: string | null) => void
+  setTotalDays: (n: number) => void
+  beginPlanning: () => void
+  backToSetup: () => void
+
+  // explore actions
+  addPlace: (regionId: string) => void
+  removePlace: (stopId: string) => void
+  movePlace: (stopId: string, direction: -1 | 1) => void
+  setStopNights: (stopId: string, nights: number) => void
+  toggleHighlight: (stopId: string, highlightId: string) => void
+
+  // map actions
   setFocusedRegion: (id: string | null) => void
-  setZoomLevel: (z: ZoomLevel) => void
-  setTransitPreference: (m: 'high_speed_rail' | 'scenic') => void
+  setHoveredRegion: (id: string | null) => void
   toggleIsochrone: (nodeId: string | null) => void
+  setTransitMode: (m: TransitMode) => void
   setSeason: (s: 'warm' | 'cold') => void
 
-  addHighlightToStop: (regionId: string, highlightId: string, dayIndex: number) => void
-  removeHighlightFromStop: (stopId: string, highlightId: string) => void
-  addStop: (regionId: string, dayIndex?: number) => void
-  removeStop: (stopId: string) => void
-  moveStopDay: (stopId: string, dayIndex: number) => void
   reset: () => void
 }
 
-function initialItinerary(): Itinerary {
-  return {
-    archetype_id: null,
-    stops: [],
-    transit_mode_preference: 'high_speed_rail',
-    total_days: 7,
-  }
+function newId(prefix: string) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
 }
 
-function stopsFromArchetype(a: Archetype): ItineraryStop[] {
-  const perRegionDays = Math.max(1, Math.floor(a.duration_days / a.stops.length))
-  return a.stops.map((regionId, i) => {
-    const region = regionsById[regionId]
-    const firstTwo = region?.curated_highlights.slice(0, 2).map((h) => h.node_id) ?? []
-    return {
-      stop_id: `stop_${regionId}_${i}`,
-      region_id: regionId,
-      highlight_ids: firstTwo,
-      day_index: i * perRegionDays,
-      suggested_hours: firstTwo.reduce(
-        (s, id) => s + (region?.curated_highlights.find((h) => h.node_id === id)?.suggested_duration_hours ?? 0),
-        0,
-      ),
-    }
-  })
+function makeStop(regionId: string, role: StopRole, nights = 1): PlaceStop {
+  return {
+    stop_id: newId(`stop_${regionId}`),
+    region_id: regionId,
+    role,
+    nights: Math.max(1, nights),
+    highlight_ids: [],
+  }
 }
 
 export const useTripStore = create<TripState>((set, get) => ({
-  phase: 'vibe',
-  vibe: defaultVibe,
-  itinerary: initialItinerary(),
+  phase: 'setup',
+  startRegionId: null,
+  endRegionId: null,
+  totalDays: 7,
+
+  stops: [],
   focusedRegionId: null,
-  zoomLevel: 'macro',
   hoveredRegionId: null,
   isochroneNodeId: null,
+
+  transitMode: 'high_speed_rail',
   season: 'warm',
 
-  setVibe: (axis, value) =>
-    set((s) => ({ vibe: { ...s.vibe, [axis]: Math.max(0, Math.min(1, value)) } })),
+  setStart: (id) => set({ startRegionId: id }),
+  setEnd: (id) => set({ endRegionId: id }),
+  setTotalDays: (n) => set({ totalDays: Math.max(1, Math.min(60, Math.round(n))) }),
 
-  setPhase: (p) => set({ phase: p }),
-
-  selectArchetype: (a) => {
-    const stops = stopsFromArchetype(a)
+  beginPlanning: () => {
+    const { startRegionId, endRegionId, totalDays } = get()
+    if (!startRegionId) return
+    const sameEndpoints = !endRegionId || endRegionId === startRegionId
+    const stops: PlaceStop[] = sameEndpoints
+      ? [makeStop(startRegionId, 'start', Math.max(1, totalDays))]
+      : [
+          makeStop(startRegionId, 'start', Math.max(1, Math.floor(totalDays / 2))),
+          makeStop(endRegionId!, 'end', Math.max(1, Math.ceil(totalDays / 2))),
+        ]
     set({
-      phase: 'sculpt',
-      itinerary: {
-        archetype_id: a.id,
-        stops,
-        transit_mode_preference: 'high_speed_rail',
-        total_days: a.duration_days,
-      },
-      focusedRegionId: stops[0]?.region_id ?? null,
-      zoomLevel: 'macro',
+      phase: 'explore',
+      stops,
+      focusedRegionId: startRegionId,
     })
   },
 
-  setHoveredRegion: (id) => set({ hoveredRegionId: id }),
-  setFocusedRegion: (id) =>
+  backToSetup: () =>
     set({
-      focusedRegionId: id,
-      zoomLevel: id ? 'meso' : 'macro',
-    }),
-  setZoomLevel: (z) => set({ zoomLevel: z }),
-  setTransitPreference: (m) =>
-    set((s) => ({ itinerary: { ...s.itinerary, transit_mode_preference: m } })),
-  toggleIsochrone: (nodeId) => set({ isochroneNodeId: nodeId }),
-  setSeason: (s) => set({ season: s }),
-
-  addHighlightToStop: (regionId, highlightId, dayIndex) => {
-    const { itinerary } = get()
-    const existing = itinerary.stops.find((s) => s.region_id === regionId)
-    const region = regionsById[regionId]
-    const hours = region?.curated_highlights.find((h) => h.node_id === highlightId)?.suggested_duration_hours ?? 2
-
-    if (existing) {
-      if (existing.highlight_ids.includes(highlightId)) return
-      set({
-        itinerary: {
-          ...itinerary,
-          stops: itinerary.stops.map((s) =>
-            s.stop_id === existing.stop_id
-              ? { ...s, highlight_ids: [...s.highlight_ids, highlightId], suggested_hours: s.suggested_hours + hours }
-              : s,
-          ),
-        },
-      })
-    } else {
-      const newStop: ItineraryStop = {
-        stop_id: `stop_${regionId}_${Date.now()}`,
-        region_id: regionId,
-        highlight_ids: [highlightId],
-        day_index: dayIndex,
-        suggested_hours: hours,
-      }
-      set({
-        itinerary: {
-          ...itinerary,
-          stops: [...itinerary.stops, newStop].sort((a, b) => a.day_index - b.day_index),
-        },
-      })
-    }
-  },
-
-  removeHighlightFromStop: (stopId, highlightId) => {
-    const { itinerary } = get()
-    set({
-      itinerary: {
-        ...itinerary,
-        stops: itinerary.stops
-          .map((s) => {
-            if (s.stop_id !== stopId) return s
-            const region = regionsById[s.region_id]
-            const hours = region?.curated_highlights.find((h) => h.node_id === highlightId)?.suggested_duration_hours ?? 0
-            return {
-              ...s,
-              highlight_ids: s.highlight_ids.filter((id) => id !== highlightId),
-              suggested_hours: Math.max(0, s.suggested_hours - hours),
-            }
-          })
-          .filter((s) => s.highlight_ids.length > 0),
-      },
-    })
-  },
-
-  addStop: (regionId, dayIndex) => {
-    const { itinerary } = get()
-    if (itinerary.stops.some((s) => s.region_id === regionId)) return
-    const region = regionsById[regionId]
-    const firstTwo = region?.curated_highlights.slice(0, 2).map((h) => h.node_id) ?? []
-    const maxDay = Math.max(-1, ...itinerary.stops.map((s) => s.day_index))
-    const newStop: ItineraryStop = {
-      stop_id: `stop_${regionId}_${Date.now()}`,
-      region_id: regionId,
-      highlight_ids: firstTwo,
-      day_index: dayIndex ?? maxDay + 2,
-      suggested_hours: firstTwo.reduce(
-        (s, id) => s + (region?.curated_highlights.find((h) => h.node_id === id)?.suggested_duration_hours ?? 0),
-        0,
-      ),
-    }
-    set({
-      itinerary: {
-        ...itinerary,
-        stops: [...itinerary.stops, newStop].sort((a, b) => a.day_index - b.day_index),
-        total_days: Math.max(itinerary.total_days, newStop.day_index + 2),
-      },
-    })
-  },
-
-  removeStop: (stopId) => {
-    const { itinerary } = get()
-    set({
-      itinerary: {
-        ...itinerary,
-        stops: itinerary.stops.filter((s) => s.stop_id !== stopId),
-      },
-    })
-  },
-
-  moveStopDay: (stopId, dayIndex) => {
-    const { itinerary } = get()
-    set({
-      itinerary: {
-        ...itinerary,
-        stops: itinerary.stops
-          .map((s) => (s.stop_id === stopId ? { ...s, day_index: Math.max(0, dayIndex) } : s))
-          .sort((a, b) => a.day_index - b.day_index),
-      },
-    })
-  },
-
-  reset: () =>
-    set({
-      phase: 'vibe',
-      vibe: defaultVibe,
-      itinerary: initialItinerary(),
+      phase: 'setup',
+      stops: [],
       focusedRegionId: null,
-      zoomLevel: 'macro',
       hoveredRegionId: null,
       isochroneNodeId: null,
     }),
+
+  addPlace: (regionId) => {
+    const { stops } = get()
+    if (stops.some((s) => s.region_id === regionId)) {
+      set({ focusedRegionId: regionId })
+      return
+    }
+    const endIdx = stops.findIndex((s) => s.role === 'end')
+    const insertAt = endIdx === -1 ? stops.length : endIdx
+    const newStop = makeStop(regionId, 'middle', 1)
+    const next = [...stops.slice(0, insertAt), newStop, ...stops.slice(insertAt)]
+    set({ stops: next, focusedRegionId: regionId })
+  },
+
+  removePlace: (stopId) => {
+    const { stops } = get()
+    const stop = stops.find((s) => s.stop_id === stopId)
+    if (!stop || stop.role !== 'middle') return
+    set({ stops: stops.filter((s) => s.stop_id !== stopId) })
+  },
+
+  movePlace: (stopId, direction) => {
+    const { stops } = get()
+    const i = stops.findIndex((s) => s.stop_id === stopId)
+    if (i === -1 || stops[i].role !== 'middle') return
+    const j = i + direction
+    if (!stops[j] || stops[j].role !== 'middle') return
+    const next = stops.slice()
+    ;[next[i], next[j]] = [next[j], next[i]]
+    set({ stops: next })
+  },
+
+  setStopNights: (stopId, nights) => {
+    const { stops } = get()
+    set({
+      stops: stops.map((s) =>
+        s.stop_id === stopId ? { ...s, nights: Math.max(1, Math.min(30, nights)) } : s,
+      ),
+    })
+  },
+
+  toggleHighlight: (stopId, highlightId) => {
+    const { stops } = get()
+    set({
+      stops: stops.map((s) => {
+        if (s.stop_id !== stopId) return s
+        const has = s.highlight_ids.includes(highlightId)
+        return {
+          ...s,
+          highlight_ids: has
+            ? s.highlight_ids.filter((id) => id !== highlightId)
+            : [...s.highlight_ids, highlightId],
+        }
+      }),
+    })
+  },
+
+  setFocusedRegion: (id) => set({ focusedRegionId: id }),
+  setHoveredRegion: (id) => set({ hoveredRegionId: id }),
+  toggleIsochrone: (nodeId) =>
+    set((s) => ({ isochroneNodeId: s.isochroneNodeId === nodeId ? null : nodeId })),
+  setTransitMode: (m) => set({ transitMode: m }),
+  setSeason: (s) => set({ season: s }),
+
+  reset: () =>
+    set({
+      phase: 'setup',
+      startRegionId: null,
+      endRegionId: null,
+      totalDays: 7,
+      stops: [],
+      focusedRegionId: null,
+      hoveredRegionId: null,
+      isochroneNodeId: null,
+      transitMode: 'high_speed_rail',
+      season: 'warm',
+    }),
 }))
 
-// Derived: tension score per day window (§4A).
-// Input: stops array. Output: map of day_index → tension (>1 = rushed).
-export function computeDayTensions(itinerary: Itinerary, baseline: number = 8): Record<number, number> {
-  const byDay: Record<number, number> = {}
-  for (const stop of itinerary.stops) {
-    byDay[stop.day_index] = (byDay[stop.day_index] ?? 0) + stop.suggested_hours
-  }
-  const result: Record<number, number> = {}
-  for (const [day, hours] of Object.entries(byDay)) {
-    result[Number(day)] = hours / baseline
-  }
-  return result
+// --- Derived helpers -------------------------------------------------------
+
+export interface DayRange {
+  start: number // 1-indexed inclusive
+  end: number
 }
 
-// Unused transit mode helper.
-export const transitPrefToMode = (
-  pref: 'high_speed_rail' | 'scenic',
-): TransitMode => (pref === 'scenic' ? 'scenic' : 'high_speed_rail')
+// Given the ordered stops + nights, compute inclusive day ranges per stop.
+// Travel between stops is assumed to consume part of the same day as arrival
+// (Google Maps-style itinerary — no extra travel day).
+export function computeDayRanges(stops: PlaceStop[]): Record<string, DayRange> {
+  const out: Record<string, DayRange> = {}
+  let cursor = 1
+  for (const stop of stops) {
+    const end = cursor + Math.max(0, stop.nights - 1)
+    out[stop.stop_id] = { start: cursor, end }
+    cursor = end + 1
+  }
+  return out
+}
+
+export function totalPlannedDays(stops: PlaceStop[]): number {
+  return stops.reduce((s, x) => s + Math.max(1, x.nights), 0)
+}
+
+export function totalPlannedHours(stops: PlaceStop[]): number {
+  let h = 0
+  for (const stop of stops) {
+    const region = regionsById[stop.region_id]
+    if (!region) continue
+    for (const id of stop.highlight_ids) {
+      const hl = region.curated_highlights.find((x) => x.node_id === id)
+      if (hl) h += hl.suggested_duration_hours
+    }
+  }
+  return h
+}
